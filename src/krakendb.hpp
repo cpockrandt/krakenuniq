@@ -25,6 +25,8 @@
 #include <map>
 
 namespace kraken {
+  class KrakenDB;
+
   class KrakenDBIndex {
     public:
     KrakenDBIndex();
@@ -33,13 +35,19 @@ namespace kraken {
 
     uint8_t index_type();
     uint8_t indexed_nt();
+    uint64_t mmap_at(uint64_t idx);
     uint64_t *get_array();
     uint64_t at(uint64_t idx);
+
+    friend KrakenDB;
 
     private:
     uint8_t idx_type;
     char *fptr;
     uint8_t nt;
+
+    char *data;
+    uint64_t data_offset;
   };
 
   class KrakenDB {
@@ -94,6 +102,13 @@ namespace kraken {
     // ptr points to start of mmap'ed DB in read or read/write mode
     KrakenDB(char *ptr, size_t filesize = 0);
 
+    ~KrakenDB();
+
+    uint32_t chunks() const;
+    void load_chunk(const uint32_t db_chunk_id);
+    uint64_t get_largest_interval(const std::vector<uint64_t> & v) const;
+    void prepare_chunking(const uint64_t max_bytes_for_db);
+    bool is_minimizer_in_chunk(const uint64_t minimizer, const uint32_t db_chunk_id) const;
 
     private:
 
@@ -105,6 +120,16 @@ namespace kraken {
     uint64_t key_len;
     uint64_t val_len;
     uint64_t key_ct;
+
+    uint64_t upper_bound(const uint64_t first, const uint64_t last);
+
+    uint32_t _chunks;
+    std::vector<uint64_t> idx_chunk_bounds;
+    std::vector<uint64_t> dbx_chunk_bounds;
+
+    char *data;
+    uint64_t data_size;
+    uint64_t data_offset;
   };
 }
 

@@ -28,6 +28,8 @@
 #include "gzstream.h"
 #include "uid_mapping.hpp"
 #include <sstream>
+#include <inttypes.h>
+#include <cassert>
 
 const size_t DEF_WORK_UNIT_SIZE = 500000;
 int New_taxid_start = 1000000000;
@@ -50,15 +52,16 @@ using namespace kraken;
 #endif
 
 
+#ifndef _OPENMP
+  int omp_get_thread_num() { return 0; }
+#endif
 
 void parse_command_line(int argc, char **argv);
 void usage(int exit_code=EX_USAGE);
 void process_file(char *filename);
-bool classify_sequence(DNASequence &dna, ostringstream &koss,
-                       ostringstream &coss, ostringstream &uoss,
-                       unordered_map<uint32_t, READCOUNTS>&);
-inline void print_sequence(ostringstream* oss_ptr, const DNASequence& dna);
-string hitlist_string(const vector<uint32_t> &taxa, const vector<char>& ambig_list);
+void classify_sequence(std::pair<DNASequence, uint32_t> & seq, FILE* fp, const uint32_t db_chunk_id);
+inline void print_sequence(ostream* os_ptr, const DNASequence& dna);
+string hitlist_string(const vector<uint32_t> &taxa, const vector<uint8_t>& ambig_list);
 
 
 set<uint32_t> get_ancestry(uint32_t taxon);
@@ -185,15 +188,24 @@ int main(int argc, char **argv) {
   for (size_t i=0; i < DB_filenames.size(); ++i) {
     cerr << " Database " << DB_filenames[i] << endl;
     db_files[i].open_file(DB_filenames[i]);
-    if (Populate_memory)
-      db_files[i].load_file();
 
     KrakenDatabases.push_back(new KrakenDB(db_files[i].ptr()));
     idx_files[i].open_file(Index_filenames[i]);
-    if (Populate_memory)
-      idx_files[i].load_file();
+    // NOTE: we switched the order, i.e., we are creating the objects before loading everything into main memory
     db_indices[i] = KrakenDBIndex(idx_files[i].ptr());
     KrakenDatabases[i]->set_index(&db_indices[i]);
+
+    if (Populate_memory) // TODO(chris): only when no chunk size is passed!
+    {
+      cout << "POPULATE" << endl;
+
+      db_files[i].load_file();
+      idx_files[i].load_file();
+    }
+    else // TODO(chris): add: else if (Populate_memory_with_chunk_size)
+    {
+      KrakenDatabases[i]->prepare_chunking(8llu * 1024 * 1024 * 1024);
+    }
   }
 
   // TODO: Check all databases have the same k
@@ -331,6 +343,10 @@ int main(int argc, char **argv) {
     ogzs->close();
   }
 
+  for (size_t i=0; i < KrakenDatabases.size(); ++i) {
+    delete KrakenDatabases[i];
+  }
+
   return 0;
 }
 
@@ -363,93 +379,318 @@ void report_stats(struct timeval time1, struct timeval time2) {
           (total_sequences - total_classified) * 100.0 / total_sequences);
 }
 
+void merge_intermediate_results_by_workers(const uint32_t db_chunk_id) {
+  const std::string filename_merged_summary = Kraken_output_file + ".tmp";
+
+  FILE *fp_prev_merged_summary = NULL;
+  std::string filename_prev_merged_summary;
+  if (db_chunk_id > 0)
+  {
+    filename_prev_merged_summary = Kraken_output_file + ".tmp_prev";
+    rename(filename_merged_summary.c_str(), filename_prev_merged_summary.c_str());
+    fp_prev_merged_summary = fopen(filename_prev_merged_summary.c_str(), "rb");
+  }
+
+  FILE *fp_merged_summary = fopen(filename_merged_summary.c_str(), "wb");
+
+  std::vector<FILE*> worker_files(Num_threads);
+  std::vector<uint32_t> next_read_id(Num_threads);
+  for (int worker_id = 0; worker_id < Num_threads; ++worker_id)
+  {
+    const std::string worker_filename = filename_merged_summary + "." + std::to_string(worker_id);
+    worker_files[worker_id] = fopen(worker_filename.c_str(), "rb");
+
+    if (fread(&next_read_id[worker_id], sizeof(next_read_id[worker_id]), 1, worker_files[worker_id]) != 1)
+      next_read_id[worker_id] = 0; // 0 indicates that there is no read left in this file (reads are indexed starting at 1)
+  }
+
+  std::vector<uint32_t> taxa, taxa_prev_summary;
+  uint32_t seq_idx = 1;
+  while (true)
+  {
+    // determine worker to get this read info from
+    int worker_to_retrieve_from = -1;
+    for (int worker_id = 0; worker_id < Num_threads; ++worker_id) {
+      if (seq_idx == next_read_id[worker_id]) {
+        worker_to_retrieve_from = worker_id;
+//        std::cout << "Retrieve from worker: " << worker_id << '\n';
+        break;
+      }
+    }
+    if (worker_to_retrieve_from == -1)
+      break; // finished processing all files
+
+    // retrieve from that worker and load next sequence name
+    uint32_t taxa_size;
+    fread(&taxa_size, sizeof(uint32_t), 1, worker_files[worker_to_retrieve_from]);
+    taxa.resize(taxa_size);
+    fread(&taxa[0], sizeof(uint32_t), taxa_size, worker_files[worker_to_retrieve_from]);
+
+    if (db_chunk_id > 0)
+    {
+      uint32_t taxa_prev_size;
+      fread(&taxa_prev_size, sizeof(uint32_t), 1, fp_prev_merged_summary);
+      assert(taxa_size == taxa_prev_size);
+      taxa_prev_summary.resize(taxa_prev_size);
+      fread(&taxa_prev_summary[0], sizeof(uint32_t), taxa_prev_size, fp_prev_merged_summary);
+
+      for (uint32_t i = 0; i < taxa_prev_summary.size(); ++i)
+      {
+        assert(!(taxa[i] && taxa_prev_summary[i])); // a kmer cannot be found in more than one database chunk
+        if (taxa_prev_summary[i])
+        {
+          taxa[i] = taxa_prev_summary[i]; // only overwrite, if previous chunks did not get a match yet
+        }
+      }
+    }
+
+    fwrite(&taxa_size, sizeof(uint32_t), 1, fp_merged_summary);
+    fwrite(&taxa[0], sizeof(uint32_t), taxa_size, fp_merged_summary);
+
+    // load the next read id from that file
+    if (fread(&next_read_id[worker_to_retrieve_from], sizeof(next_read_id[worker_to_retrieve_from]), 1, worker_files[worker_to_retrieve_from]) != 1)
+      next_read_id[worker_to_retrieve_from] = 0; // 0 indicates that there is no read left in this file (reads are indexed starting at 1)
+
+    ++seq_idx;
+  }
+
+  for (int worker_id = 0; worker_id < Num_threads; ++worker_id)
+  {
+    fclose(worker_files[worker_id]);
+    const std::string worker_filename = filename_merged_summary + "." + std::to_string(worker_id);
+    unlink(worker_filename.c_str());
+  }
+
+  if (db_chunk_id > 0)
+  {
+    fclose(fp_prev_merged_summary);
+    unlink(filename_prev_merged_summary.c_str());
+  }
+
+  fclose(fp_merged_summary);
+}
+
 void process_file(char *filename) {
   string file_str(filename);
-  DNASequenceReader *reader;
   DNASequence dna;
 
+  // TODO: need to iterate over databases outside this loop because databases might have different number of chunks or even different minimizer lengths
+  for (uint32_t db_chunk_id = 0; db_chunk_id < KrakenDatabases[0]->chunks(); ++db_chunk_id)
+  {
+    total_sequences = 0;
+    total_bases = 0;
+    KrakenDatabases[0]->load_chunk(db_chunk_id);
+
+    DNASequenceReader *reader;
+    if (Fastq_input)
+      reader = new FastqReader(file_str);
+    else
+      reader = new FastaReader(file_str);
+    uint32_t seq_idx = 1;
+
+#ifdef _OPENMP
+    #pragma omp parallel
+#endif
+    {
+      vector <std::pair<DNASequence, uint32_t> > work_unit;
+      const int worker_id = omp_get_thread_num();
+      const std::string worker_filename = Kraken_output_file + ".tmp." + std::to_string(worker_id);
+
+      FILE *fp = fopen(worker_filename.c_str(), "wb");
+
+      while (reader->is_valid()) {
+        work_unit.clear();
+        size_t total_nt = 0;
+
+#ifdef _OPENMP
+        #pragma omp critical(get_input)
+#endif
+        {
+          while (total_nt < Work_unit_size) {
+            dna = reader->next_sequence();
+            if (!reader->is_valid())
+              break;
+            work_unit.emplace_back(dna, seq_idx);
+            total_nt += dna.seq.size();
+            ++seq_idx;
+          }
+        }
+        if (total_nt == 0)
+          break;
+
+        for (size_t j = 0; j < work_unit.size(); j++) {
+          classify_sequence(work_unit[j], fp, db_chunk_id);
+        }
+
+#ifdef _OPENMP
+        #pragma omp critical(progress)
+#endif
+        {
+          total_sequences += work_unit.size();
+          total_bases += total_nt;
+          if (Print_Progress) {
+            fprintf(stderr, "\r Processed %llu sequences (database chunk %" PRIu32" of %" PRIu32 ")",
+                    total_sequences, db_chunk_id + 1, KrakenDatabases[0]->chunks());
+          }
+        }
+      }
+      fclose(fp);
+    }  // end parallel section
+
+    delete reader;
+    merge_intermediate_results_by_workers(db_chunk_id);
+  }
+  // TODO: with multiple databases we should iterate over them here before classifying
+  // HOW: when merging the worker-files, we should merge that with the last chunk of the last database, so that we will never have more than one intermediate file
+  // also saves tmp disk space!
+
+  fprintf(stderr, "\r Processed %llu sequences\n", total_sequences);
+
+  // merge intermediate results of all chunks and classify
+  // TODO: parallelize this (need to buffer reads), we also do not care about the final output order
+  total_sequences = 0;
+  total_classified = 0;
+
+  DNASequenceReader *reader;
   if (Fastq_input)
     reader = new FastqReader(file_str);
   else
     reader = new FastaReader(file_str);
 
-#ifdef _OPENMP
-  #pragma omp parallel
-#endif
-  {
-    vector<DNASequence> work_unit;
-    ostringstream kraken_output_ss, classified_output_ss, unclassified_output_ss;
+  unordered_map<uint32_t, uint32_t> hit_counts;
+  vector<uint32_t> taxa;
+  vector<uint8_t> ambig_list;
 
-    while (reader->is_valid()) {
-      work_unit.clear();
-      size_t total_nt = 0;
+  const std::string taxa_summary_filename = Kraken_output_file + ".tmp";
+  FILE* fp_taxa_summary = fopen(taxa_summary_filename.c_str(), "rb");
 
-#ifdef _OPENMP
-      #pragma omp critical(get_input)
-#endif
+  while (reader->is_valid()) {
+    hit_counts.clear();
+    taxa.clear();
+    ambig_list.clear();
+
+    dna = reader->next_sequence();
+    if (!reader->is_valid())
+      break;
+
+    // merge results from chunks into 'taxa'
+    uint32_t hits = 0;
+
+    // get number of elements (taxa.size())
+    uint32_t taxa_size;
+    fread(&taxa_size, sizeof(taxa_size), 1, fp_taxa_summary);
+
+    taxa.resize(taxa_size);
+    fread(&taxa[0], sizeof(uint32_t), taxa_size, fp_taxa_summary);
+
+    for (uint32_t i = 0; i < taxa.size(); ++i)
+    {
+      if (taxa[i])
       {
-        while (total_nt < Work_unit_size) {
-          dna = reader->next_sequence();
-          if (! reader->is_valid())
-            break;
-          work_unit.push_back(dna);
-          total_nt += dna.seq.size();
-        }
-      }
-      if (total_nt == 0)
-        break;
-      
-      unordered_map<uint32_t, READCOUNTS> my_taxon_counts;
-      uint64_t my_total_classified = 0;
-      kraken_output_ss.str("");
-      classified_output_ss.str("");
-      unclassified_output_ss.str("");
-      for (size_t j = 0; j < work_unit.size(); j++) {
-        my_total_classified += 
-            classify_sequence( work_unit[j], kraken_output_ss,
-                           classified_output_ss, unclassified_output_ss,
-                           my_taxon_counts);
-      }
- 
-#ifdef _OPENMP
-      #pragma omp critical(write_output)
-#endif
-      {
-        total_classified += my_total_classified;
-        for (auto it = my_taxon_counts.begin(); it != my_taxon_counts.end(); ++it) {
-          taxon_counts[it->first] += std::move(it->second);
-        }
-
-        if (Print_kraken)
-          (*Kraken_output) << kraken_output_ss.str();
-        if (Print_classified)
-          (*Classified_output) << classified_output_ss.str();
-        if (Print_unclassified)
-          (*Unclassified_output) << unclassified_output_ss.str();
-        total_sequences += work_unit.size();
-        total_bases += total_nt;
-        //if (Print_Progress && total_sequences % 100000 < work_unit.size()) 
-        if (Print_Progress) {  
-          fprintf(stderr, "\r Processed %llu sequences (%.2f%% classified)",
-                          total_sequences, total_classified * 100.0 / total_sequences);
-        }
+        ++hit_counts[taxa[i]];
+        // TODO: stop querying this read with other databases
+        if (Quick_mode && ++hits >= Minimum_hit_count)
+          goto quick_mode_call;
       }
     }
-  }  // end parallel section
+
+quick_mode_call:
+    uint64_t *kmer_ptr;
+    uint32_t taxon = 0;
+    if (dna.seq.size() >= KrakenDatabases[0]->get_k()) { // TODO: this if-statement should go somewhere else
+      KmerScanner scanner(dna.seq);
+      uint32_t taxa_idx = 0;
+      while ((kmer_ptr = scanner.next_kmer()) != NULL) {
+        if (scanner.ambig_kmer()) {
+          ambig_list.push_back(1);
+        } else {
+          ambig_list.push_back(0);
+          uint64_t cannonical_kmer = KrakenDatabases[0]->canonical_representation(*kmer_ptr);
+          taxon = taxa[taxa_idx];
+          taxon_counts[taxon].add_kmer(cannonical_kmer);
+        }
+        ++taxa_idx;
+      }
+    }
+
+    uint32_t call = 0;
+    if (Map_UIDs) {
+      if (Quick_mode) {
+        cerr << "Quick mode not available when mapping UIDs" << endl;
+        exit(1);
+      } else {
+        call = resolve_uids3(hit_counts, Parent_map, Uid_dict,
+                             UID_to_TaxID_map_file.ptr(), UID_to_TaxID_map_file.size());
+      }
+    } else {
+      if (Quick_mode)
+        call = hits >= Minimum_hit_count ? taxon : 0;
+      else
+        call = resolve_tree(hit_counts, Parent_map);
+    }
+
+    total_classified += (call != 0);
+    taxon_counts[call].incrementReadCount();
+
+    if (Print_unclassified && !call)
+      print_sequence(Unclassified_output, dna);
+
+    if (Print_classified && call)
+      print_sequence(Classified_output, dna);
+
+    if (!Print_kraken) {
+      goto next_read; // return call;
+    }
+
+    if (call) {
+      (*Kraken_output) << "C\t";
+    }
+    else {
+      if (Only_classified_kraken_output) {
+        goto next_read; // return false;
+      }
+      (*Kraken_output) << "U\t";
+    }
+    (*Kraken_output) << dna.id << '\t' << call << '\t' << dna.seq.size() << '\t';
+
+    if (Quick_mode) {
+      (*Kraken_output) << "Q:" << hits;
+    }
+    else {
+      if (taxa.empty())
+        (*Kraken_output) << "0:0";
+      else
+        (*Kraken_output) << hitlist_string(taxa, ambig_list);
+    }
+
+    if (Print_sequence)
+      (*Kraken_output) << "\t" << dna.seq;
+
+    (*Kraken_output) << "\n";
+    // return call;
+next_read:
+    ++total_sequences;
+    fprintf(stderr, "\r Processed %llu sequences (%.2f%% classified)",
+            total_sequences, total_classified * 100.0 / total_sequences);
+    (void)1;
+  }
+
+  fclose(fp_taxa_summary);
+  unlink(taxa_summary_filename.c_str());
 
   delete reader;
 }
 
 
-inline void print_sequence(ostringstream* oss_ptr, const DNASequence& dna) {
+inline void print_sequence(ostream* os_ptr, const DNASequence& dna) {
       if (Fastq_input) {
-        (*oss_ptr) << "@" << dna.header_line << endl
+        (*os_ptr) << "@" << dna.header_line << endl
             << dna.seq << endl
             << "+" << endl
             << dna.quals << endl;
       }
       else {
-        (*oss_ptr) << ">" << dna.header_line << endl
+        (*os_ptr) << ">" << dna.header_line << endl
             << dna.seq << endl;
       }
 }
@@ -544,38 +785,31 @@ string hitlist_string_depr(const vector<uint32_t> &taxa)
 }
 */
 
-bool classify_sequence(DNASequence &dna, ostringstream &koss,
-                       ostringstream &coss, ostringstream &uoss,
-                       unordered_map<uint32_t, READCOUNTS>& my_taxon_counts) {
+void classify_sequence(std::pair<DNASequence, uint32_t> & seq, FILE* fp, const uint32_t db_chunk_id) {
   vector<uint32_t> taxa;
-  vector<uint8_t> ambig_list;
-  unordered_map<uint32_t, uint32_t> hit_counts;
   uint64_t *kmer_ptr;
-  uint32_t taxon = 0;
-  uint32_t hits = 0;  // only maintained if in quick mode
+  uint32_t taxon;
 
-  //string hitlist_string;
-  //uint32_t last_taxon;
-  //uint32_t last_counter;
+  auto & dna = seq.first;
+  const uint32_t & seq_idx = seq.second;
 
   vector<db_status> db_statuses(KrakenDatabases.size());
 
   if (dna.seq.size() >= KrakenDatabases[0]->get_k()) {
     size_t n_kmers = dna.seq.size()-KrakenDatabases[0]->get_k()+1;
     taxa.reserve(n_kmers);
-    ambig_list.reserve(n_kmers);
     KmerScanner scanner(dna.seq);
     while ((kmer_ptr = scanner.next_kmer()) != NULL) {
       taxon = 0;
-      if (scanner.ambig_kmer()) {
-        //append_hitlist_string(hitlist_string, last_taxon, last_counter, ambig_taxon);
-        ambig_list.push_back(1);
-      }
-      else {
+      if (!scanner.ambig_kmer()) {
         uint64_t cannonical_kmer = KrakenDatabases[0]->canonical_representation(*kmer_ptr);
-        ambig_list.push_back(0);
+        const uint64_t minimizer = KrakenDatabases[0]->bin_key(cannonical_kmer); // TODO: inefficient because minimizer will also be computed in kmer_query()
+
         // go through multiple databases to map k-mer
         for (size_t i=0; i<KrakenDatabases.size(); ++i) {
+          if (!KrakenDatabases[i]->is_minimizer_in_chunk(minimizer, db_chunk_id))
+            continue;
+
           uint32_t* val_ptr = KrakenDatabases[i]->kmer_query(
             cannonical_kmer, &db_statuses[i].current_bin_key,
             &db_statuses[i].current_min_pos, &db_statuses[i].current_max_pos);
@@ -584,81 +818,15 @@ bool classify_sequence(DNASequence &dna, ostringstream &koss,
             break;
           }
         }
-
-        // cerr << "taxon for " << *kmer_ptr << " is " << taxon << endl;
-        my_taxon_counts[taxon].add_kmer(cannonical_kmer);
-
-        if (taxon) {
-          hit_counts[taxon]++;
-          if (Quick_mode && ++hits >= Minimum_hit_count)
-            break;
-        }
       }
       taxa.push_back(taxon);
-      //append_hitlist_string(hitlist_string, last_taxon, last_counter, taxon);
     }
   }
 
-  uint32_t call = 0;
-  if (Map_UIDs) {
-    if (Quick_mode) {
-      cerr << "Quick mode not available when mapping UIDs" << endl;
-      exit(1);
-    } else {
-      call = resolve_uids3(hit_counts, Parent_map, Uid_dict,
-        UID_to_TaxID_map_file.ptr(), UID_to_TaxID_map_file.size());
-    }
-  } else {
-    if (Quick_mode)
-      call = hits >= Minimum_hit_count ? taxon : 0;
-    else
-      call = resolve_tree(hit_counts, Parent_map);
-  }
-
-  my_taxon_counts[call].incrementReadCount();
-
-  if (Print_unclassified && !call) 
-    print_sequence(&uoss, dna);
-
-  if (Print_classified && call)
-    print_sequence(&coss, dna);
-
-
-  if (! Print_kraken)
-    return call;
-
-  if (call) {
-    koss << "C\t";
-  }
-  else {
-    if (Only_classified_kraken_output)
-      return false;
-    koss << "U\t";
-  }
-  koss << dna.id << '\t' << call << '\t' << dna.seq.size() << '\t';
-
-  if (Quick_mode) {
-    koss << "Q:" << hits;
-  }
-  else {
-    if (taxa.empty())
-      koss << "0:0";
-    else
-      koss << hitlist_string(taxa, ambig_list);
-    //if (hitlist_string.empty() && last_counter == 0)
-    //  koss << "0:0";
-    //else {
-    //  koss << hitlist_string
-    //       << (last_taxon == ambig_taxon? "A" :  std::to_string(last_taxon))
-    //       << ':' << std::to_string(last_counter);
-    //}
-  }
-
-  if (Print_sequence)
-      koss << "\t" << dna.seq;
-
-  koss << "\n";
-  return call;
+  const uint32_t taxa_size = taxa.size();
+  fwrite(&seq_idx, sizeof(uint32_t), 1, fp); // seq_idx
+  fwrite(&taxa_size, sizeof(uint32_t), 1, fp); // number of elements
+  fwrite(&taxa[0], sizeof(uint32_t), taxa_size, fp); // elements
 }
 
 set<uint32_t> get_ancestry(uint32_t taxon) {
