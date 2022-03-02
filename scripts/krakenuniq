@@ -30,7 +30,8 @@ use Cwd;
 use File::Path qw/make_path/;
 
 my $PROG = basename $0;
-my $KRAKEN_DIR = "#####=KRAKEN_DIR=#####";
+my $KRAKEN_DIR = "/Users/chris/Dev/Uni/krakenuniq/src";
+my $KRAKEN_DIR_SCRIPT="/Users/chris/Dev/Uni/krakenuniq/scripts";
 
 # Test to see if the executables got moved, try to recover if we can
 if (! -e "$KRAKEN_DIR/classify") {
@@ -38,7 +39,7 @@ if (! -e "$KRAKEN_DIR/classify") {
   $KRAKEN_DIR = dirname abs_path($0);
 }
 
-require "$KRAKEN_DIR/krakenlib.pm";
+require "$KRAKEN_DIR_SCRIPT/krakenlib.pm";
 $ENV{"KRAKEN_DIR"} = $KRAKEN_DIR;
 $ENV{"PATH"} = "$KRAKEN_DIR:$ENV{PATH}";
 

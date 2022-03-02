@@ -89,7 +89,7 @@ namespace kraken {
       a_path.insert(a);
       auto a_it = parent_map.find(a);
       if (a_it == parent_map.end()) {
-        cerr << "No parent for " << a << "!\n";
+        // cerr << "No parent for " << a << "!\n";
         break;
       } 
       a = a_it->second;
@@ -100,7 +100,7 @@ namespace kraken {
 
       auto b_it = parent_map.find(b);
       if (b_it == parent_map.end()) {
-        cerr << "No parent for " << b << "!\n";
+        // cerr << "No parent for " << b << "!\n";
         break;
       } 
       b = b_it->second;
@@ -156,7 +156,7 @@ namespace kraken {
         }
         auto node_it = parent_map.find(node);
         if (node_it == parent_map.end()) {
-          cerr << "No parent for " << node << " recorded" << endl;
+          // cerr << "No parent for " << node << " recorded" << endl;
           break;
         } else if (node_it->second == node) {
           cerr << "Taxon " << node << " has itself as parent!" << endl;
