@@ -28,6 +28,8 @@
 #include<vector>
 #include<unordered_set>
 #include<cstdint>
+#include<limits>
+
 using namespace std;
 
 //#define HLL_DEBUG
