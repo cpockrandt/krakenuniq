@@ -851,7 +851,7 @@ template<typename TAXID>
 void TaxonomyDB<TAXID>::setGenomeSize(const TAXID taxid, const uint64_t genomeSize) {
   auto it = entries.find(taxid);
   if (it == entries.end()) {
-    cerr << "No taxonomy entry for " << taxid << "!!" << endl;
+    // cerr << "No taxonomy entry for " << taxid << "!!" << endl;
     return;
   }
   TaxonomyEntry<TAXID>* tax = &it->second;
@@ -935,7 +935,7 @@ TaxReport<TAXID,READCOUNTS>::TaxReport(std::ostream& reportOfb, const TaxonomyDB
   for (auto it = _taxCounts.begin(); it != _taxCounts.end(); ++it) {
     auto tax_it = taxdb.entries.find(it->first);
     if (tax_it == taxdb.entries.end()) {
-      cerr << "No entry for " << it->first << " in database!" << endl;
+      //cerr << "No entry for " << it->first << " in database!" << endl;
     } else {
       const TaxonomyEntry<TAXID>* tax = &(tax_it->second);
       while (tax != NULL) {
