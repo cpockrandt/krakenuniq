@@ -554,10 +554,6 @@ bool classify_sequence(DNASequence &dna, ostringstream &koss,
   uint32_t taxon = 0;
   uint32_t hits = 0;  // only maintained if in quick mode
 
-  //string hitlist_string;
-  //uint32_t last_taxon;
-  //uint32_t last_counter;
-
   vector<db_status> db_statuses(KrakenDatabases.size());
 
   if (dna.seq.size() >= KrakenDatabases[0]->get_k()) {
@@ -568,7 +564,6 @@ bool classify_sequence(DNASequence &dna, ostringstream &koss,
     while ((kmer_ptr = scanner.next_kmer()) != NULL) {
       taxon = 0;
       if (scanner.ambig_kmer()) {
-        //append_hitlist_string(hitlist_string, last_taxon, last_counter, ambig_taxon);
         ambig_list.push_back(1);
       }
       else {
@@ -585,7 +580,6 @@ bool classify_sequence(DNASequence &dna, ostringstream &koss,
           }
         }
 
-        // cerr << "taxon for " << *kmer_ptr << " is " << taxon << endl;
         my_taxon_counts[taxon].add_kmer(cannonical_kmer);
 
         if (taxon) {
@@ -595,7 +589,6 @@ bool classify_sequence(DNASequence &dna, ostringstream &koss,
         }
       }
       taxa.push_back(taxon);
-      //append_hitlist_string(hitlist_string, last_taxon, last_counter, taxon);
     }
   }
 
@@ -645,13 +638,6 @@ bool classify_sequence(DNASequence &dna, ostringstream &koss,
       koss << "0:0";
     else
       koss << hitlist_string(taxa, ambig_list);
-    //if (hitlist_string.empty() && last_counter == 0)
-    //  koss << "0:0";
-    //else {
-    //  koss << hitlist_string
-    //       << (last_taxon == ambig_taxon? "A" :  std::to_string(last_taxon))
-    //       << ':' << std::to_string(last_counter);
-    //}
   }
 
   if (Print_sequence)
