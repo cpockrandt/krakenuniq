@@ -56,6 +56,9 @@ namespace kraken {
     uint64_t pair_size();       // how many bytes does each pair occupy?
 
     size_t header_size();  // Jellyfish uses variable header sizes
+
+    void prefatch(int64_t min, int64_t max);
+    uint32_t *kmer_query_by_minimizer(uint64_t kmer, int64_t min, int64_t max);
     uint32_t *kmer_query(uint64_t kmer);  // return ptr to pair w/ kmer
 
     // perform search over last range to speed up queries
@@ -95,7 +98,7 @@ namespace kraken {
     KrakenDB(char *ptr, size_t filesize = 0);
 
 
-    private:
+    public:
 
     size_t _filesize;
     char *fptr;

@@ -240,6 +240,52 @@ uint64_t KrakenDB::canonical_representation(uint64_t kmer) {
   return kmer < revcom ? kmer : revcom;
 }
 
+void KrakenDB::prefatch(int64_t min, int64_t max)
+{
+    char *ptr = get_pair_ptr();
+    size_t pair_sz = pair_size();
+
+    int64_t start = pair_sz * min;
+    int64_t end = pair_sz * max;
+
+    for (; start < end; start += 4 * 64) // L1 cache is probably 64 bytes, see PREFATCH_STRIDE in http://tomoyo.osdn.jp/cgi-bin/lxr/source/include/linux/prefetch.h#L55
+        __builtin_prefetch(ptr + start);
+
+    // __builtin_prefetch(ptr + pair_sz * min); // TODO: or just load the very first entry. need to do benchmarking
+}
+
+uint32_t *KrakenDB::kmer_query_by_minimizer(uint64_t kmer, int64_t min, int64_t max)
+{
+    int64_t mid;
+    uint64_t comp_kmer;
+    char *ptr = get_pair_ptr();
+    size_t pair_sz = pair_size();
+
+    // Binary search with large window
+    while (min + 15 <= max) {
+        mid = min + (max - min) / 2;
+        comp_kmer = 0;
+        memcpy(&comp_kmer, ptr + pair_sz * mid, key_len);
+        comp_kmer &= (1ull << key_bits) - 1;  // trim any excess
+        if (kmer > comp_kmer)
+            min = mid + 1;
+        else if (kmer < comp_kmer)
+            max = mid - 1;
+        else
+            return (uint32_t *) (ptr + pair_sz * mid + key_len);
+    }
+    // Linear search once window shrinks
+    for (mid = min; mid <= max; mid++) {
+        comp_kmer = 0;
+        memcpy(&comp_kmer, ptr + pair_sz * mid, key_len);
+        comp_kmer &= (1ull << key_bits) - 1;  // trim any excess
+        if (kmer == comp_kmer)
+            return (uint32_t *) (ptr + pair_sz * mid + key_len);
+    }
+
+    return NULL;
+}
+
 // perform search over last range to speed up queries
 // NOTE: retry_on_failure implies all pointer params are non-NULL
 uint32_t *KrakenDB::kmer_query(uint64_t kmer, uint64_t *last_bin_key,

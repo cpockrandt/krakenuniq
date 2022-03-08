@@ -556,31 +556,67 @@ bool classify_sequence(DNASequence &dna, ostringstream &koss,
 
   vector<db_status> db_statuses(KrakenDatabases.size());
 
+  std::vector<uint64_t> canonical_kmers; // TODO: need this for every database
+  std::vector<uint64_t> canonical_minimizers;
+  std::vector<std::pair<int64_t, int64_t> > minimizer_range;
   if (dna.seq.size() >= KrakenDatabases[0]->get_k()) {
     size_t n_kmers = dna.seq.size()-KrakenDatabases[0]->get_k()+1;
     taxa.reserve(n_kmers);
     ambig_list.reserve(n_kmers);
     KmerScanner scanner(dna.seq);
     while ((kmer_ptr = scanner.next_kmer()) != NULL) {
-      taxon = 0;
       if (scanner.ambig_kmer()) {
         ambig_list.push_back(1);
+        canonical_kmers.push_back(~0ULL);
+        canonical_minimizers.push_back(~0ULL);
       }
       else {
-        uint64_t cannonical_kmer = KrakenDatabases[0]->canonical_representation(*kmer_ptr);
         ambig_list.push_back(0);
+        uint64_t cannonical_kmer = KrakenDatabases[0]->canonical_representation(*kmer_ptr);
+        uint64_t cannonical_minimizer = KrakenDatabases[0]->bin_key(cannonical_kmer);
+        canonical_kmers.push_back(cannonical_kmer);
+        canonical_minimizers.push_back(cannonical_minimizer);
+      }
+    }
+
+    for (uint32_t minimizer_idx = 0; minimizer_idx < canonical_minimizers.size(); ++minimizer_idx)
+    {
+      if (ambig_list[minimizer_idx])
+      {
+        minimizer_range.emplace_back(~0ULL, ~0ULL);
+        continue;
+      }
+
+      if (minimizer_idx > 0 && canonical_minimizers[minimizer_idx] == canonical_minimizers[minimizer_idx - 1])
+      {
+        minimizer_range.push_back(minimizer_range.back());
+      }
+      else
+      {
+        int64_t min = KrakenDatabases[0]->index_ptr->at(canonical_minimizers[minimizer_idx]);
+        int64_t max = KrakenDatabases[0]->index_ptr->at(canonical_minimizers[minimizer_idx] + 1) - 1;
+        minimizer_range.emplace_back(min, max);
+        KrakenDatabases[0]->prefatch(min, max);
+      }
+    }
+
+    for (uint32_t minimizer_idx = 0; minimizer_idx < canonical_minimizers.size(); ++minimizer_idx)
+    {
+      taxon = 0;
+      if (!ambig_list[minimizer_idx]) {
+        uint64_t canonical_kmer = canonical_kmers[minimizer_idx];
         // go through multiple databases to map k-mer
         for (size_t i=0; i<KrakenDatabases.size(); ++i) {
-          uint32_t* val_ptr = KrakenDatabases[i]->kmer_query(
-            cannonical_kmer, &db_statuses[i].current_bin_key,
-            &db_statuses[i].current_min_pos, &db_statuses[i].current_max_pos);
+          uint32_t* val_ptr = KrakenDatabases[i]->kmer_query_by_minimizer(canonical_kmer,
+                                                                          minimizer_range[minimizer_idx].first,
+                                                                          minimizer_range[minimizer_idx].second);
           if (val_ptr) {
             taxon = *val_ptr;
             break;
           }
         }
 
-        my_taxon_counts[taxon].add_kmer(cannonical_kmer);
+        my_taxon_counts[taxon].add_kmer(canonical_kmer);
 
         if (taxon) {
           hit_counts[taxon]++;
