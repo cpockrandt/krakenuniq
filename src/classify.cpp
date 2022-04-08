@@ -79,6 +79,7 @@ bool Print_unclassified = false;
 bool Print_kraken = true;
 bool Print_kraken_report = false;
 bool Populate_memory = false;
+uint64_t Populate_memory_size = 0;
 bool Only_classified_kraken_output = false;
 bool Print_sequence = false;
 bool Print_Progress = true;
@@ -138,22 +139,6 @@ ostream* cout_or_file(string file, bool append = false) {
     }
 }
 
-void loadKrakenDB(KrakenDB& database, string DB_filename, string Index_filename) {
-  QuickFile db_file;
-  db_file.open_file(DB_filename);
-  if (Populate_memory) {
-    db_file.load_file();
-  }
-  database = KrakenDB(db_file.ptr());
-  QuickFile idx_file;
-  idx_file.open_file(Index_filename);
-  if (Populate_memory)
-    idx_file.load_file();
-
-  KrakenDBIndex db_index(idx_file.ptr());
-  database.set_index(&db_index);
-}
-
 int main(int argc, char **argv) {
   #ifdef _OPENMP
   omp_set_num_threads(1);
@@ -176,7 +161,7 @@ int main(int argc, char **argv) {
     //}
   }
 
-  if (Populate_memory)
+  if (Populate_memory && Populate_memory_size == 0)
     cerr << "Loading database(s)... " << endl;
 
   static vector<QuickFile> idx_files (DB_filenames.size());
@@ -195,16 +180,14 @@ int main(int argc, char **argv) {
     db_indices[i] = KrakenDBIndex(idx_files[i].ptr());
     KrakenDatabases[i]->set_index(&db_indices[i]);
 
-    if (Populate_memory) // TODO(chris): only when no chunk size is passed!
+    if (Populate_memory && Populate_memory_size == 0) // only when no chunk size is passed!
     {
-      cout << "POPULATE" << endl;
-
       db_files[i].load_file();
       idx_files[i].load_file();
     }
-    else // TODO(chris): add: else if (Populate_memory_with_chunk_size)
+    else if (Populate_memory && Populate_memory_size > 0)
     {
-      KrakenDatabases[i]->prepare_chunking(8llu * 1024 * 1024 * 1024);
+      KrakenDatabases[i]->prepare_chunking(Populate_memory_size/*8llu * 1024 * 1024 * 1024*/);
     }
   }
 
@@ -219,7 +202,7 @@ int main(int argc, char **argv) {
   };
   KmerScanner::set_k(kmer_size);
 
-  if (Populate_memory)
+  if (Populate_memory && Populate_memory_size == 0)
     cerr << "\ncomplete." << endl;
 
 
@@ -845,7 +828,7 @@ void parse_command_line(int argc, char **argv) {
 
   if (argc > 1 && strcmp(argv[1], "-h") == 0)
     usage(0);
-  while ((opt = getopt(argc, argv, "d:i:t:u:n:m:o:qfcC:U:Ma:r:sI:p:")) != -1) {
+  while ((opt = getopt(argc, argv, "d:i:t:u:n:m:o:qfcC:U:Ma:r:sI:p:x:")) != -1) {
     switch (opt) {
       case 'd' :
         DB_filenames.push_back(optarg);
@@ -911,6 +894,10 @@ void parse_command_line(int argc, char **argv) {
       case 'M' :
         Populate_memory = true;
         break;
+      case 'x' :
+        Populate_memory = true;
+        Populate_memory_size = strtoull(optarg, NULL, 0);
+        break;
       case 'I' :
         UID_to_TaxID_map_filename = optarg;
         Map_UIDs = true;
@@ -953,7 +940,8 @@ void usage(int exit_code) {
        << "  -U filename      Print unclassified sequences" << endl
        << "  -f               Input is in FASTQ format" << endl
        << "  -c               Only include classified reads in output" << endl
-       << "  -M               Preload database files" << endl
+       << "  -M               Preload database files (optionally: " << endl
+       << "  -x size          Preload database files using x amount of RAM (e.g. 5G)" << endl
        << "  -s               Print read sequence in Kraken output" << endl
        << "  -h               Print this message" << endl
        << endl
