@@ -59,7 +59,11 @@ using namespace kraken;
 void parse_command_line(int argc, char **argv);
 void usage(int exit_code=EX_USAGE);
 void process_file(char *filename);
-void classify_sequence(std::pair<DNASequence, uint32_t> & seq, FILE* fp, const uint32_t db_chunk_id);
+void process_file_with_db_chunk(char *filename);
+void classify_sequence_with_db_chunk(std::pair<DNASequence, uint32_t> & seq, FILE* fp, const uint32_t db_chunk_id);
+bool classify_sequence(DNASequence &dna, ostringstream &koss,
+                       ostringstream &coss, ostringstream &uoss,
+                       unordered_map<uint32_t, READCOUNTS>&);
 inline void print_sequence(ostream* os_ptr, const DNASequence& dna);
 string hitlist_string(const vector<uint32_t> &taxa, const vector<uint8_t>& ambig_list);
 
@@ -182,11 +186,13 @@ int main(int argc, char **argv) {
 
     if (Populate_memory && Populate_memory_size == 0) // only when no chunk size is passed!
     {
+      printf("DEBUG: load entire DB\n");
       db_files[i].load_file();
       idx_files[i].load_file();
     }
     else if (Populate_memory && Populate_memory_size > 0)
     {
+      printf("DEBUG: prepare_chunking\n");
       KrakenDatabases[i]->prepare_chunking(Populate_memory_size/*8llu * 1024 * 1024 * 1024*/);
     }
   }
@@ -239,8 +245,12 @@ int main(int argc, char **argv) {
 
   struct timeval tv1, tv2;
   gettimeofday(&tv1, NULL);
-  for (int i = optind; i < argc; i++)
-    process_file(argv[i]);
+  for (int i = optind; i < argc; i++) {
+    if (Populate_memory && Populate_memory_size > 0)
+      process_file_with_db_chunk(argv[i]);
+    else
+      process_file(argv[i]);
+  }
   gettimeofday(&tv2, NULL);
 
   report_stats(tv1, tv2);
@@ -458,6 +468,83 @@ void merge_intermediate_results_by_workers(const uint32_t db_chunk_id) {
 
 void process_file(char *filename) {
   string file_str(filename);
+  DNASequenceReader *reader;
+  DNASequence dna;
+
+  if (Fastq_input)
+    reader = new FastqReader(file_str);
+  else
+    reader = new FastaReader(file_str);
+
+#ifdef _OPENMP
+#pragma omp parallel
+#endif
+  {
+    vector<DNASequence> work_unit;
+    ostringstream kraken_output_ss, classified_output_ss, unclassified_output_ss;
+
+    while (reader->is_valid()) {
+      work_unit.clear();
+      size_t total_nt = 0;
+
+#ifdef _OPENMP
+#pragma omp critical(get_input)
+#endif
+      {
+        while (total_nt < Work_unit_size) {
+          dna = reader->next_sequence();
+          if (! reader->is_valid())
+            break;
+          work_unit.push_back(dna);
+          total_nt += dna.seq.size();
+        }
+      }
+      if (total_nt == 0)
+        break;
+
+      unordered_map<uint32_t, READCOUNTS> my_taxon_counts;
+      uint64_t my_total_classified = 0;
+      kraken_output_ss.str("");
+      classified_output_ss.str("");
+      unclassified_output_ss.str("");
+      for (size_t j = 0; j < work_unit.size(); j++) {
+        my_total_classified +=
+                classify_sequence( work_unit[j], kraken_output_ss,
+                                   classified_output_ss, unclassified_output_ss,
+                                   my_taxon_counts);
+      }
+
+#ifdef _OPENMP
+#pragma omp critical(write_output)
+#endif
+      {
+        total_classified += my_total_classified;
+        for (auto it = my_taxon_counts.begin(); it != my_taxon_counts.end(); ++it) {
+          taxon_counts[it->first] += std::move(it->second);
+        }
+
+        if (Print_kraken)
+          (*Kraken_output) << kraken_output_ss.str();
+        if (Print_classified)
+          (*Classified_output) << classified_output_ss.str();
+        if (Print_unclassified)
+          (*Unclassified_output) << unclassified_output_ss.str();
+        total_sequences += work_unit.size();
+        total_bases += total_nt;
+        //if (Print_Progress && total_sequences % 100000 < work_unit.size())
+        if (Print_Progress) {
+          fprintf(stderr, "\r Processed %llu sequences (%.2f%% classified)",
+                  total_sequences, total_classified * 100.0 / total_sequences);
+        }
+      }
+    }
+  }  // end parallel section
+
+  delete reader;
+}
+
+void process_file_with_db_chunk(char *filename) {
+  string file_str(filename);
   DNASequence dna;
 
   // TODO: need to iterate over databases outside this loop because databases might have different number of chunks or even different minimizer lengths
@@ -506,7 +593,7 @@ void process_file(char *filename) {
           break;
 
         for (size_t j = 0; j < work_unit.size(); j++) {
-          classify_sequence(work_unit[j], fp, db_chunk_id);
+          classify_sequence_with_db_chunk(work_unit[j], fp, db_chunk_id);
         }
 
 #ifdef _OPENMP
@@ -772,7 +859,7 @@ string hitlist_string_depr(const vector<uint32_t> &taxa)
 }
 */
 
-void classify_sequence(std::pair<DNASequence, uint32_t> & seq, FILE* fp, const uint32_t db_chunk_id) {
+void classify_sequence_with_db_chunks(std::pair<DNASequence, uint32_t> & seq, FILE* fp, const uint32_t db_chunk_id) {
   vector<uint32_t> taxa;
   uint64_t *kmer_ptr;
   uint32_t taxon;
@@ -797,9 +884,170 @@ void classify_sequence(std::pair<DNASequence, uint32_t> & seq, FILE* fp, const u
           if (!KrakenDatabases[i]->is_minimizer_in_chunk(minimizer, db_chunk_id))
             continue;
 
-          uint32_t* val_ptr = KrakenDatabases[i]->kmer_query(
+          uint32_t* val_ptr = KrakenDatabases[i]->kmer_query_with_db_chunks(
             cannonical_kmer, &db_statuses[i].current_bin_key,
             &db_statuses[i].current_min_pos, &db_statuses[i].current_max_pos);
+          if (val_ptr) {
+            taxon = *val_ptr;
+            break;
+          }
+        }
+      }
+      taxa.push_back(taxon);
+    }
+  }
+
+  const uint32_t taxa_size = taxa.size();
+  fwrite(&seq_idx, sizeof(uint32_t), 1, fp); // seq_idx
+  fwrite(&taxa_size, sizeof(uint32_t), 1, fp); // number of elements
+  fwrite(&taxa[0], sizeof(uint32_t), taxa_size, fp); // elements
+}
+
+bool classify_sequence(DNASequence &dna, ostringstream &koss,
+                       ostringstream &coss, ostringstream &uoss,
+                       unordered_map<uint32_t, READCOUNTS>& my_taxon_counts) {
+  vector<uint32_t> taxa;
+  vector<uint8_t> ambig_list;
+  unordered_map<uint32_t, uint32_t> hit_counts;
+  uint64_t *kmer_ptr;
+  uint32_t taxon = 0;
+  uint32_t hits = 0;  // only maintained if in quick mode
+
+  //string hitlist_string;
+  //uint32_t last_taxon;
+  //uint32_t last_counter;
+
+  vector<db_status> db_statuses(KrakenDatabases.size());
+
+  if (dna.seq.size() >= KrakenDatabases[0]->get_k()) {
+    size_t n_kmers = dna.seq.size()-KrakenDatabases[0]->get_k()+1;
+    taxa.reserve(n_kmers);
+    ambig_list.reserve(n_kmers);
+    KmerScanner scanner(dna.seq);
+    while ((kmer_ptr = scanner.next_kmer()) != NULL) {
+      taxon = 0;
+      if (scanner.ambig_kmer()) {
+        //append_hitlist_string(hitlist_string, last_taxon, last_counter, ambig_taxon);
+        ambig_list.push_back(1);
+      }
+      else {
+        uint64_t cannonical_kmer = KrakenDatabases[0]->canonical_representation(*kmer_ptr);
+        ambig_list.push_back(0);
+        // go through multiple databases to map k-mer
+        for (size_t i=0; i<KrakenDatabases.size(); ++i) {
+          uint32_t* val_ptr = KrakenDatabases[i]->kmer_query(
+                  cannonical_kmer, &db_statuses[i].current_bin_key,
+                  &db_statuses[i].current_min_pos, &db_statuses[i].current_max_pos);
+          if (val_ptr) {
+            taxon = *val_ptr;
+            break;
+          }
+        }
+
+        // cerr << "taxon for " << *kmer_ptr << " is " << taxon << endl;
+        my_taxon_counts[taxon].add_kmer(cannonical_kmer);
+
+        if (taxon) {
+          hit_counts[taxon]++;
+          if (Quick_mode && ++hits >= Minimum_hit_count)
+            break;
+        }
+      }
+      taxa.push_back(taxon);
+      //append_hitlist_string(hitlist_string, last_taxon, last_counter, taxon);
+    }
+  }
+
+  uint32_t call = 0;
+  if (Map_UIDs) {
+    if (Quick_mode) {
+      cerr << "Quick mode not available when mapping UIDs" << endl;
+      exit(1);
+    } else {
+      call = resolve_uids3(hit_counts, Parent_map, Uid_dict,
+                           UID_to_TaxID_map_file.ptr(), UID_to_TaxID_map_file.size());
+    }
+  } else {
+    if (Quick_mode)
+      call = hits >= Minimum_hit_count ? taxon : 0;
+    else
+      call = resolve_tree(hit_counts, Parent_map);
+  }
+
+  my_taxon_counts[call].incrementReadCount();
+
+  if (Print_unclassified && !call)
+    print_sequence(&uoss, dna);
+
+  if (Print_classified && call)
+    print_sequence(&coss, dna);
+
+
+  if (! Print_kraken)
+    return call;
+
+  if (call) {
+    koss << "C\t";
+  }
+  else {
+    if (Only_classified_kraken_output)
+      return false;
+    koss << "U\t";
+  }
+  koss << dna.id << '\t' << call << '\t' << dna.seq.size() << '\t';
+
+  if (Quick_mode) {
+    koss << "Q:" << hits;
+  }
+  else {
+    if (taxa.empty())
+      koss << "0:0";
+    else
+      koss << hitlist_string(taxa, ambig_list);
+    //if (hitlist_string.empty() && last_counter == 0)
+    //  koss << "0:0";
+    //else {
+    //  koss << hitlist_string
+    //       << (last_taxon == ambig_taxon? "A" :  std::to_string(last_taxon))
+    //       << ':' << std::to_string(last_counter);
+    //}
+  }
+
+  if (Print_sequence)
+    koss << "\t" << dna.seq;
+
+  koss << "\n";
+  return call;
+}
+
+void classify_sequence_with_db_chunk(std::pair<DNASequence, uint32_t> & seq, FILE* fp, const uint32_t db_chunk_id) {
+  vector<uint32_t> taxa;
+  uint64_t *kmer_ptr;
+  uint32_t taxon;
+
+  auto & dna = seq.first;
+  const uint32_t & seq_idx = seq.second;
+
+  vector<db_status> db_statuses(KrakenDatabases.size());
+
+  if (dna.seq.size() >= KrakenDatabases[0]->get_k()) {
+    size_t n_kmers = dna.seq.size()-KrakenDatabases[0]->get_k()+1;
+    taxa.reserve(n_kmers);
+    KmerScanner scanner(dna.seq);
+    while ((kmer_ptr = scanner.next_kmer()) != NULL) {
+      taxon = 0;
+      if (!scanner.ambig_kmer()) {
+        uint64_t cannonical_kmer = KrakenDatabases[0]->canonical_representation(*kmer_ptr);
+        const uint64_t minimizer = KrakenDatabases[0]->bin_key(cannonical_kmer); // TODO: inefficient because minimizer will also be computed in kmer_query()
+
+        // go through multiple databases to map k-mer
+        for (size_t i=0; i<KrakenDatabases.size(); ++i) {
+          if (!KrakenDatabases[i]->is_minimizer_in_chunk(minimizer, db_chunk_id))
+            continue;
+
+          uint32_t* val_ptr = KrakenDatabases[i]->kmer_query_with_db_chunks(
+                  cannonical_kmer, &db_statuses[i].current_bin_key,
+                  &db_statuses[i].current_min_pos, &db_statuses[i].current_max_pos);
           if (val_ptr) {
             taxon = *val_ptr;
             break;

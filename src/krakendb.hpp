@@ -36,6 +36,8 @@ namespace kraken {
     uint8_t index_type();
     uint8_t indexed_nt();
     uint64_t mmap_at(uint64_t idx);
+    uint64_t *get_array_with_db_chunks();
+    uint64_t at_with_db_chunks(uint64_t idx);
     uint64_t *get_array();
     uint64_t at(uint64_t idx);
 
@@ -71,6 +73,12 @@ namespace kraken {
                          int64_t *min_pos, int64_t *max_pos,
                          bool retry_on_failure=true);
 
+    uint32_t *kmer_query_with_db_chunks(uint64_t kmer);  // return ptr to pair w/ kmer
+
+    // perform search over last range to speed up queries
+    uint32_t *kmer_query_with_db_chunks(uint64_t kmer, uint64_t *last_bin_key,
+                                        int64_t *min_pos, int64_t *max_pos,
+                                        bool retry_on_failure=true);
 
     // return a count of k-mers for all taxons
     std::map<uint32_t,uint64_t> count_taxons();
