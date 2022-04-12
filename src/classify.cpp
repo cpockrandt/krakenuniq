@@ -370,11 +370,13 @@ void merge_intermediate_results_by_workers(const uint32_t db_chunk_id) {
   if (db_chunk_id > 0)
   {
     filename_prev_merged_summary = Kraken_output_file + ".tmp_prev";
-    rename(filename_merged_summary.c_str(), filename_prev_merged_summary.c_str());
+    int ret = rename(filename_merged_summary.c_str(), filename_prev_merged_summary.c_str());
+    fprintf(stderr, "\n\nrename: %i\n\n", ret);
     fp_prev_merged_summary = fopen(filename_prev_merged_summary.c_str(), "rb");
   }
 
   FILE *fp_merged_summary = fopen(filename_merged_summary.c_str(), "wb");
+  fprintf(stderr, "\n\nfopen fp_merged_summary: %i\n\n", fp_merged_summary);
 
   std::vector<FILE*> worker_files(Num_threads);
   std::vector<uint32_t> next_read_id(Num_threads);
@@ -382,6 +384,7 @@ void merge_intermediate_results_by_workers(const uint32_t db_chunk_id) {
   {
     const std::string worker_filename = filename_merged_summary + "." + std::to_string(worker_id);
     worker_files[worker_id] = fopen(worker_filename.c_str(), "rb");
+    fprintf(stderr, "\n\nfopen worker_files[]: %i\n\n", worker_files[worker_id]);
 
     if (fread(&next_read_id[worker_id], sizeof(next_read_id[worker_id]), 1, worker_files[worker_id]) != 1)
       next_read_id[worker_id] = 0; // 0 indicates that there is no read left in this file (reads are indexed starting at 1)
@@ -480,6 +483,7 @@ void process_file(char *filename) {
       const std::string worker_filename = Kraken_output_file + ".tmp." + std::to_string(worker_id);
 
       FILE *fp = fopen(worker_filename.c_str(), "wb");
+      fprintf(stderr, "\n\nfopen fp worker_filename %s %p\n\n", worker_filename.c_str(), fp);
 
       while (reader->is_valid()) {
         work_unit.clear();
