@@ -1144,7 +1144,7 @@ void parse_command_line(int argc, char **argv) {
         break;
       case 'x' :
         Populate_memory = true;
-        Populate_memory_size = strtoull(optarg, NULL, 0);
+        Populate_memory_size = parse_human_readable_size(optarg); // strtoull(optarg, NULL, 0);
         break;
       case 'I' :
         UID_to_TaxID_map_filename = optarg;
