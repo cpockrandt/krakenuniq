@@ -114,7 +114,6 @@ namespace kraken {
 
     uint32_t chunks() const;
     void load_chunk(const uint32_t db_chunk_id);
-    uint64_t get_largest_interval(const std::vector<uint64_t> & v) const;
     void prepare_chunking(const uint64_t max_bytes_for_db);
     bool is_minimizer_in_chunk(const uint64_t minimizer, const uint32_t db_chunk_id) const;
 

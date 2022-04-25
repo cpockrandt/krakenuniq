@@ -64,7 +64,7 @@ void classify_sequence_with_db_chunk(std::pair<DNASequence, uint32_t> & seq, FIL
 bool classify_sequence(DNASequence &dna, ostringstream &koss,
                        ostringstream &coss, ostringstream &uoss,
                        unordered_map<uint32_t, READCOUNTS>&);
-inline void print_sequence(ostream* os_ptr, const DNASequence& dna);
+inline void print_sequence(ostream* oss_ptr, const DNASequence& dna);
 string hitlist_string(const vector<uint32_t> &taxa, const vector<uint8_t>& ambig_list);
 
 
@@ -531,7 +531,7 @@ void process_file(char *filename) {
         //if (Print_Progress && total_sequences % 100000 < work_unit.size())
         if (Print_Progress) {
           fprintf(stderr, "\r Processed %llu sequences (%.2f%% classified)",
-                  total_sequences, total_classified * 100.0 / total_sequences);
+                          total_sequences, total_classified * 100.0 / total_sequences);
         }
       }
     }
@@ -752,15 +752,15 @@ next_read:
 }
 
 
-inline void print_sequence(ostream* os_ptr, const DNASequence& dna) {
+inline void print_sequence(ostream* oss_ptr, const DNASequence& dna) {
       if (Fastq_input) {
-        (*os_ptr) << "@" << dna.header_line << endl
+        (*oss_ptr) << "@" << dna.header_line << endl
             << dna.seq << endl
             << "+" << endl
             << dna.quals << endl;
       }
       else {
-        (*os_ptr) << ">" << dna.header_line << endl
+        (*oss_ptr) << ">" << dna.header_line << endl
             << dna.seq << endl;
       }
 }
@@ -932,8 +932,8 @@ bool classify_sequence(DNASequence &dna, ostringstream &koss,
         // go through multiple databases to map k-mer
         for (size_t i=0; i<KrakenDatabases.size(); ++i) {
           uint32_t* val_ptr = KrakenDatabases[i]->kmer_query(
-                  cannonical_kmer, &db_statuses[i].current_bin_key,
-                  &db_statuses[i].current_min_pos, &db_statuses[i].current_max_pos);
+            cannonical_kmer, &db_statuses[i].current_bin_key,
+            &db_statuses[i].current_min_pos, &db_statuses[i].current_max_pos);
           if (val_ptr) {
             taxon = *val_ptr;
             break;

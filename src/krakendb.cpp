@@ -22,7 +22,6 @@
 #include "krakendb.hpp"
 #include "quickfile.hpp"
 #include <unordered_map>
-#include <cassert>
 
 using std::string;
 using std::vector;
@@ -424,15 +423,6 @@ void KrakenDB::load_chunk(const uint32_t db_chunk_id) {
   memcpy(index_ptr->data, id_chunk_start, id_chunk_len);
 }
 
-uint64_t KrakenDB::get_largest_interval(const std::vector<uint64_t> & v) const {
-  uint64_t max = 0;
-  for (uint64_t i = 1; i < v.size(); ++i) {
-    if (v[i] - v[i - 1] > max)
-      max = v[i] - v[i - 1];
-  }
-  return max;
-}
-
 // returns first element LARGER
 // half-open interval. first is inclusive, last is exclusive
 // the return value has to be treated as inclusive (closed interval)
@@ -573,7 +563,6 @@ uint64_t *KrakenDBIndex::get_array_with_db_chunks() { // TODO: remove wrapper
   return (uint64_t *) data;
 }
 
-// Convenience method, allows for testing guard
 uint64_t KrakenDBIndex::at_with_db_chunks(uint64_t idx) {
   uint64_t *array = get_array_with_db_chunks();
 #ifdef TESTING
@@ -588,6 +577,7 @@ uint64_t *KrakenDBIndex::get_array() {
   return (uint64_t *) (fptr + strlen(KRAKEN_INDEX_STRING) + 1);
 }
 
+// Convenience method, allows for testing guard
 uint64_t KrakenDBIndex::at(uint64_t idx) {
   uint64_t *array = get_array();
   #ifdef TESTING
