@@ -505,14 +505,14 @@ void process_file(char *filename) {
       classified_output_ss.str("");
       unclassified_output_ss.str("");
       for (size_t j = 0; j < work_unit.size(); j++) {
-        my_total_classified +=
-                classify_sequence( work_unit[j], kraken_output_ss,
-                                   classified_output_ss, unclassified_output_ss,
-                                   my_taxon_counts);
+        my_total_classified += 
+            classify_sequence( work_unit[j], kraken_output_ss,
+                       classified_output_ss, unclassified_output_ss,
+                       my_taxon_counts);
       }
-
+ 
 #ifdef _OPENMP
-    #pragma omp critical(write_output)
+      #pragma omp critical(write_output)
 #endif
       {
         total_classified += my_total_classified;
@@ -961,7 +961,7 @@ bool classify_sequence(DNASequence &dna, ostringstream &koss,
       exit(1);
     } else {
       call = resolve_uids3(hit_counts, Parent_map, Uid_dict,
-                           UID_to_TaxID_map_file.ptr(), UID_to_TaxID_map_file.size());
+        UID_to_TaxID_map_file.ptr(), UID_to_TaxID_map_file.size());
     }
   } else {
     if (Quick_mode)
@@ -972,7 +972,7 @@ bool classify_sequence(DNASequence &dna, ostringstream &koss,
 
   my_taxon_counts[call].incrementReadCount();
 
-  if (Print_unclassified && !call)
+  if (Print_unclassified && !call) 
     print_sequence(&uoss, dna);
 
   if (Print_classified && call)
