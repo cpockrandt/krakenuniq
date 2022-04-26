@@ -65,7 +65,7 @@ bool classify_sequence(DNASequence &dna, ostringstream &koss,
                        ostringstream &coss, ostringstream &uoss,
                        unordered_map<uint32_t, READCOUNTS>&);
 inline void print_sequence(ostream* oss_ptr, const DNASequence& dna);
-string hitlist_string(const vector<uint32_t> &taxa, const vector<uint8_t>& ambig_list);
+string hitlist_string(const vector<uint32_t> &taxa, const vector<char>& ambig_list);
 
 
 set<uint32_t> get_ancestry(uint32_t taxon);
@@ -627,7 +627,7 @@ void process_file_with_db_chunk(char *filename) {
 
   unordered_map<uint32_t, uint32_t> hit_counts;
   vector<uint32_t> taxa;
-  vector<uint8_t> ambig_list;
+  vector<char> ambig_list;
 
   const std::string taxa_summary_filename = Kraken_output_file + ".tmp";
   FILE* fp_taxa_summary = fopen(taxa_summary_filename.c_str(), "rb");
@@ -782,7 +782,7 @@ void append_hitlist_string(string& hitlist_string, uint32_t& last_taxon, uint32_
 }
 */
 
-string hitlist_string(const vector<uint32_t> &taxa, const vector<uint8_t> &ambig)
+string hitlist_string(const vector<uint32_t> &taxa, const vector<char> &ambig)
 {
   int64_t last_code;
   int code_count = 1;
@@ -901,7 +901,7 @@ bool classify_sequence(DNASequence &dna, ostringstream &koss,
                        ostringstream &coss, ostringstream &uoss,
                        unordered_map<uint32_t, READCOUNTS>& my_taxon_counts) {
   vector<uint32_t> taxa;
-  vector<uint8_t> ambig_list;
+  vector<char> ambig_list;
   unordered_map<uint32_t, uint32_t> hit_counts;
   uint64_t *kmer_ptr;
   uint32_t taxon = 0;
