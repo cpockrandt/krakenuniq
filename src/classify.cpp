@@ -186,13 +186,11 @@ int main(int argc, char **argv) {
 
     if (Populate_memory && Populate_memory_size == 0) // only when no chunk size is passed!
     {
-      printf("DEBUG: load entire DB\n");
       db_files[i].load_file();
       idx_files[i].load_file();
     }
     else if (Populate_memory && Populate_memory_size > 0)
     {
-      printf("DEBUG: prepare_chunking\n");
       KrakenDatabases[i]->prepare_chunking(Populate_memory_size/*8llu * 1024 * 1024 * 1024*/);
     }
   }
@@ -498,7 +496,7 @@ void process_file(char *filename) {
       }
       if (total_nt == 0)
         break;
-
+      
       unordered_map<uint32_t, READCOUNTS> my_taxon_counts;
       uint64_t my_total_classified = 0;
       kraken_output_ss.str("");
@@ -507,8 +505,8 @@ void process_file(char *filename) {
       for (size_t j = 0; j < work_unit.size(); j++) {
         my_total_classified += 
             classify_sequence( work_unit[j], kraken_output_ss,
-                       classified_output_ss, unclassified_output_ss,
-                       my_taxon_counts);
+                           classified_output_ss, unclassified_output_ss,
+                           my_taxon_counts);
       }
  
 #ifdef _OPENMP
@@ -528,8 +526,8 @@ void process_file(char *filename) {
           (*Unclassified_output) << unclassified_output_ss.str();
         total_sequences += work_unit.size();
         total_bases += total_nt;
-        //if (Print_Progress && total_sequences % 100000 < work_unit.size())
-        if (Print_Progress) {
+        //if (Print_Progress && total_sequences % 100000 < work_unit.size()) 
+        if (Print_Progress) {  
           fprintf(stderr, "\r Processed %llu sequences (%.2f%% classified)",
                           total_sequences, total_classified * 100.0 / total_sequences);
         }

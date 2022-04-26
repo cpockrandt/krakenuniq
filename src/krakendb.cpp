@@ -61,7 +61,6 @@ KrakenDB::KrakenDB(char *ptr, size_t filesize) {
   _filesize = filesize;
   index_ptr = NULL;
   fptr = ptr;
-//  data = fptr;
   if (ptr == NULL) {
     errx(EX_DATAERR, "pointer is NULL");
   }
@@ -527,7 +526,6 @@ KrakenDBIndex::KrakenDBIndex() {
 
 KrakenDBIndex::KrakenDBIndex(char *ptr) {
   fptr = ptr;
-  // data = fptr + strlen(KRAKEN_INDEX_STRING) + 1;
   idx_type = 1;
   if (strncmp(ptr, KRAKEN_INDEX_STRING, strlen(KRAKEN_INDEX_STRING))) {
     idx_type = 2;
