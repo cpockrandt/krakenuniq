@@ -60,7 +60,7 @@ void parse_command_line(int argc, char **argv);
 void usage(int exit_code=EX_USAGE);
 void process_file(char *filename);
 void process_file_with_db_chunk(char *filename);
-void classify_sequence_with_db_chunk(std::pair<DNASequence, uint32_t> & seq, FILE* fp, const uint32_t db_chunk_id);
+void classify_sequence_with_db_chunk(std::pair<DNASequence, uint32_t> & seq, FILE* fp, const uint32_t db_chunk_id, const uint32_t db_id);
 bool classify_sequence(DNASequence &dna, ostringstream &koss,
                        ostringstream &coss, ostringstream &uoss,
                        unordered_map<uint32_t, READCOUNTS>&);
@@ -585,9 +585,9 @@ void process_file_with_db_chunk(char *filename) {
         if (total_nt == 0)
           break;
 
-        for (size_t j = 0; j < work_unit.size(); j++) {
-          classify_sequence_with_db_chunk(work_unit[j], fp, db_chunk_id);
-        }
+          for (size_t j = 0; j < work_unit.size(); j++) {
+            classify_sequence_with_db_chunk(work_unit[j], fp, db_chunk_id, 0);
+          }
 
 #ifdef _OPENMP
           #pragma omp critical(progress)
@@ -966,7 +966,7 @@ bool classify_sequence(DNASequence &dna, ostringstream &koss,
   return call;
 }
 
-void classify_sequence_with_db_chunk(std::pair<DNASequence, uint32_t> & seq, FILE* fp, const uint32_t db_chunk_id) {
+void classify_sequence_with_db_chunk(std::pair<DNASequence, uint32_t> & seq, FILE* fp, const uint32_t db_chunk_id, const uint32_t db_id) {
   vector<uint32_t> taxa;
   uint64_t *kmer_ptr;
   uint32_t taxon;
