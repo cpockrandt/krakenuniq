@@ -377,7 +377,7 @@ void merge_intermediate_results_by_workers(const uint32_t db_chunk_id) {
   std::string filename_prev_merged_summary;
   if (db_chunk_id > 0)
   {
-    filename_prev_merged_summary = Kraken_output_file + ".tmp_prev";
+    filename_prev_merged_summary = filename_merged_summary + ".prev";
     rename(filename_merged_summary.c_str(), filename_prev_merged_summary.c_str());
     fp_prev_merged_summary = fopen(filename_prev_merged_summary.c_str(), "rb");
   }
@@ -548,20 +548,20 @@ void process_file_with_db_chunk(char *filename) {
     total_bases = 0;
     KrakenDatabases[0]->load_chunk(db_chunk_id);
 
-    DNASequenceReader *reader;
-    if (Fastq_input)
-      reader = new FastqReader(file_str);
-    else
-      reader = new FastaReader(file_str);
-    uint32_t seq_idx = 1;
+      DNASequenceReader *reader;
+      if (Fastq_input)
+        reader = new FastqReader(file_str);
+      else
+        reader = new FastaReader(file_str);
+      uint32_t seq_idx = 1;
 
 #ifdef _OPENMP
       #pragma omp parallel
 #endif
-    {
-      vector <std::pair<DNASequence, uint32_t> > work_unit;
-      const int worker_id = omp_get_thread_num();
-      const std::string worker_filename = Kraken_output_file + ".tmp." + std::to_string(worker_id);
+      {
+        vector <std::pair<DNASequence, uint32_t> > work_unit;
+        const int worker_id = omp_get_thread_num();
+        const std::string worker_filename = Kraken_output_file + ".tmp." + std::to_string(worker_id);
 
         FILE *fp = fopen(worker_filename.c_str(), "wb");
 
@@ -848,50 +848,6 @@ string hitlist_string_depr(const vector<uint32_t> &taxa)
   return hitlist.str();
 }
 */
-
-void classify_sequence_with_db_chunks(std::pair<DNASequence, uint32_t> & seq, FILE* fp, const uint32_t db_chunk_id) {
-  vector<uint32_t> taxa;
-  uint64_t *kmer_ptr;
-  uint32_t taxon;
-
-  auto & dna = seq.first;
-  const uint32_t & seq_idx = seq.second;
-
-  vector<db_status> db_statuses(KrakenDatabases.size());
-
-  if (dna.seq.size() >= KrakenDatabases[0]->get_k()) {
-    size_t n_kmers = dna.seq.size()-KrakenDatabases[0]->get_k()+1;
-    taxa.reserve(n_kmers);
-    KmerScanner scanner(dna.seq);
-    while ((kmer_ptr = scanner.next_kmer()) != NULL) {
-      taxon = 0;
-      if (!scanner.ambig_kmer()) {
-        uint64_t cannonical_kmer = KrakenDatabases[0]->canonical_representation(*kmer_ptr);
-        const uint64_t minimizer = KrakenDatabases[0]->bin_key(cannonical_kmer); // TODO: inefficient because minimizer will also be computed in kmer_query()
-
-        // go through multiple databases to map k-mer
-        for (size_t i=0; i<KrakenDatabases.size(); ++i) {
-          if (!KrakenDatabases[i]->is_minimizer_in_chunk(minimizer, db_chunk_id))
-            continue;
-
-          uint32_t* val_ptr = KrakenDatabases[i]->kmer_query_with_db_chunks(
-            cannonical_kmer, &db_statuses[i].current_bin_key,
-            &db_statuses[i].current_min_pos, &db_statuses[i].current_max_pos);
-          if (val_ptr) {
-            taxon = *val_ptr;
-            break;
-          }
-        }
-      }
-      taxa.push_back(taxon);
-    }
-  }
-
-  const uint32_t taxa_size = taxa.size();
-  fwrite(&seq_idx, sizeof(uint32_t), 1, fp); // seq_idx
-  fwrite(&taxa_size, sizeof(uint32_t), 1, fp); // number of elements
-  fwrite(&taxa[0], sizeof(uint32_t), taxa_size, fp); // elements
-}
 
 bool classify_sequence(DNASequence &dna, ostringstream &koss,
                        ostringstream &coss, ostringstream &uoss,
