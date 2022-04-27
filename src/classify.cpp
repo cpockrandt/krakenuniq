@@ -195,7 +195,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  // TODO: Check all databases have the same k
+  // Check all databases have the same k
   uint8_t kmer_size = KrakenDatabases[0]->get_k();
   for (size_t i = 1; i < KrakenDatabases.size(); ++i) {
     uint8_t kmer_size_i = KrakenDatabases[i]->get_k();
@@ -404,7 +404,6 @@ void merge_intermediate_results_by_workers(const uint32_t db_chunk_id) {
     for (int worker_id = 0; worker_id < Num_threads; ++worker_id) {
       if (seq_idx == next_read_id[worker_id]) {
         worker_to_retrieve_from = worker_id;
-//        std::cout << "Retrieve from worker: " << worker_id << '\n';
         break;
       }
     }
@@ -430,7 +429,7 @@ void merge_intermediate_results_by_workers(const uint32_t db_chunk_id) {
         assert(!(taxa[i] && taxa_prev_summary[i])); // a kmer cannot be found in more than one database chunk
         if (taxa_prev_summary[i])
         {
-          taxa[i] = taxa_prev_summary[i]; // only overwrite, if previous chunks did not get a match yet
+          taxa[i] = taxa_prev_summary[i]; // if previous chunk/database got a match, keep the tax info
         }
       }
     }
@@ -557,21 +556,21 @@ void process_file_with_db_chunk(char *filename) {
     uint32_t seq_idx = 1;
 
 #ifdef _OPENMP
-    #pragma omp parallel
+      #pragma omp parallel
 #endif
     {
       vector <std::pair<DNASequence, uint32_t> > work_unit;
       const int worker_id = omp_get_thread_num();
       const std::string worker_filename = Kraken_output_file + ".tmp." + std::to_string(worker_id);
 
-      FILE *fp = fopen(worker_filename.c_str(), "wb");
+        FILE *fp = fopen(worker_filename.c_str(), "wb");
 
-      while (reader->is_valid()) {
-        work_unit.clear();
-        size_t total_nt = 0;
+        while (reader->is_valid()) {
+          work_unit.clear();
+          size_t total_nt = 0;
 
 #ifdef _OPENMP
-        #pragma omp critical(get_input)
+          #pragma omp critical(get_input)
 #endif
         {
           while (total_nt < Work_unit_size) {
@@ -591,7 +590,7 @@ void process_file_with_db_chunk(char *filename) {
         }
 
 #ifdef _OPENMP
-        #pragma omp critical(progress)
+          #pragma omp critical(progress)
 #endif
         {
           total_sequences += work_unit.size();
@@ -608,9 +607,6 @@ void process_file_with_db_chunk(char *filename) {
     delete reader;
     merge_intermediate_results_by_workers(db_chunk_id);
   }
-  // TODO: with multiple databases we should iterate over them here before classifying
-  // HOW: when merging the worker-files, we should merge that with the last chunk of the last database, so that we will never have more than one intermediate file
-  // also saves tmp disk space!
 
   fprintf(stderr, "\r Processed %llu sequences\n", total_sequences);
 
@@ -665,7 +661,7 @@ void process_file_with_db_chunk(char *filename) {
 quick_mode_call:
     uint64_t *kmer_ptr;
     uint32_t taxon = 0;
-    if (dna.seq.size() >= KrakenDatabases[0]->get_k()) { // TODO: this if-statement should go somewhere else
+    if (dna.seq.size() >= KrakenDatabases[0]->get_k()) {
       KmerScanner scanner(dna.seq);
       uint32_t taxa_idx = 0;
       while ((kmer_ptr = scanner.next_kmer()) != NULL) {

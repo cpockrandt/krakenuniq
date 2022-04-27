@@ -1,4 +1,4 @@
-CXX = g++-11
+CXX = g++
 FOPENMP?=-fopenmp
 NDEBUG=-D NDEBUG
 
