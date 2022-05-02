@@ -983,10 +983,9 @@ void classify_sequence_with_db_chunk(std::pair<DNASequence, uint32_t> & seq, FIL
     while ((kmer_ptr = scanner.next_kmer()) != NULL) {
       taxon = 0;
       if (!scanner.ambig_kmer()) {
-        uint64_t cannonical_kmer = KrakenDatabases[0]->canonical_representation(*kmer_ptr);
-        const uint64_t minimizer = KrakenDatabases[0]->bin_key(cannonical_kmer); // TODO: inefficient because minimizer will also be computed in kmer_query()
+        uint64_t cannonical_kmer = KrakenDatabases[db_id]->canonical_representation(*kmer_ptr);
+        const uint64_t minimizer = KrakenDatabases[db_id]->bin_key(cannonical_kmer); // TODO: inefficient because minimizer will also be computed in kmer_query()
 
-        // go through multiple databases to map k-mer
         for (size_t i=0; i<KrakenDatabases.size(); ++i) {
           if (!KrakenDatabases[i]->is_minimizer_in_chunk(minimizer, db_chunk_id))
             continue;
