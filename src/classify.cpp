@@ -987,17 +987,17 @@ void classify_sequence_with_db_chunk(std::pair<DNASequence, uint32_t> & seq, FIL
         const uint64_t minimizer = KrakenDatabases[db_id]->bin_key(cannonical_kmer); // TODO: inefficient because minimizer will also be computed in kmer_query()
 
         for (size_t i=0; i<KrakenDatabases.size(); ++i) {
-          if (!KrakenDatabases[i]->is_minimizer_in_chunk(minimizer, db_chunk_id))
-            continue;
+        if (!KrakenDatabases[db_id]->is_minimizer_in_chunk(minimizer, db_chunk_id))
+          continue;
 
-          uint32_t* val_ptr = KrakenDatabases[i]->kmer_query_with_db_chunks(
-                  cannonical_kmer, &db_statuses[i].current_bin_key,
-                  &db_statuses[i].current_min_pos, &db_statuses[i].current_max_pos);
           if (val_ptr) {
             taxon = *val_ptr;
             break;
           }
         }
+        uint32_t* val_ptr = KrakenDatabases[db_id]->kmer_query_with_db_chunks(
+                cannonical_kmer, &db_statuses[db_id].current_bin_key,
+                &db_statuses[db_id].current_min_pos, &db_statuses[db_id].current_max_pos);
       }
       taxa.push_back(taxon);
     }
