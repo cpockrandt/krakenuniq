@@ -370,12 +370,12 @@ void report_stats(struct timeval time1, struct timeval time2) {
           (total_sequences - total_classified) * 100.0 / total_sequences);
 }
 
-void merge_intermediate_results_by_workers(const uint32_t db_chunk_id) {
+void merge_intermediate_results_by_workers(const bool first_intermediate_output) {
   const std::string filename_merged_summary = Kraken_output_file + ".tmp";
 
   FILE *fp_prev_merged_summary = NULL;
   std::string filename_prev_merged_summary;
-  if (db_chunk_id > 0)
+  if (!first_intermediate_output)
   {
     filename_prev_merged_summary = filename_merged_summary + ".prev";
     rename(filename_merged_summary.c_str(), filename_prev_merged_summary.c_str());
@@ -416,7 +416,7 @@ void merge_intermediate_results_by_workers(const uint32_t db_chunk_id) {
     taxa.resize(taxa_size);
     fread(&taxa[0], sizeof(uint32_t), taxa_size, worker_files[worker_to_retrieve_from]);
 
-    if (db_chunk_id > 0)
+    if (!first_intermediate_output)
     {
       uint32_t taxa_prev_size;
       fread(&taxa_prev_size, sizeof(uint32_t), 1, fp_prev_merged_summary);
@@ -451,7 +451,7 @@ void merge_intermediate_results_by_workers(const uint32_t db_chunk_id) {
     unlink(worker_filename.c_str());
   }
 
-  if (db_chunk_id > 0)
+  if (!first_intermediate_output)
   {
     fclose(fp_prev_merged_summary);
     unlink(filename_prev_merged_summary.c_str());
@@ -541,12 +541,15 @@ void process_file_with_db_chunk(char *filename) {
   string file_str(filename);
   DNASequence dna;
 
-  // TODO: need to iterate over databases outside this loop because databases might have different number of chunks or even different minimizer lengths
-  for (uint32_t db_chunk_id = 0; db_chunk_id < KrakenDatabases[0]->chunks(); ++db_chunk_id)
+  // iterate over databases
+  bool first_intermediate_output = true;
+  for (size_t i=0; i<KrakenDatabases.size(); ++i)
   {
-    total_sequences = 0;
-    total_bases = 0;
-    KrakenDatabases[0]->load_chunk(db_chunk_id);
+    for (uint32_t db_chunk_id = 0; db_chunk_id < KrakenDatabases[0]->chunks(); ++db_chunk_id)
+    {
+      total_sequences = 0;
+      total_bases = 0;
+      KrakenDatabases[i]->load_chunk(db_chunk_id);
 
       DNASequenceReader *reader;
       if (Fastq_input)
@@ -572,18 +575,18 @@ void process_file_with_db_chunk(char *filename) {
 #ifdef _OPENMP
           #pragma omp critical(get_input)
 #endif
-        {
-          while (total_nt < Work_unit_size) {
-            dna = reader->next_sequence();
-            if (!reader->is_valid())
-              break;
-            work_unit.emplace_back(dna, seq_idx);
-            total_nt += dna.seq.size();
-            ++seq_idx;
+          {
+            while (total_nt < Work_unit_size) {
+              dna = reader->next_sequence();
+              if (!reader->is_valid())
+                break;
+              work_unit.emplace_back(dna, seq_idx);
+              total_nt += dna.seq.size();
+              ++seq_idx;
+            }
           }
-        }
-        if (total_nt == 0)
-          break;
+          if (total_nt == 0)
+            break;
 
           for (size_t j = 0; j < work_unit.size(); j++) {
             classify_sequence_with_db_chunk(work_unit[j], fp, db_chunk_id, 0);
@@ -592,20 +595,22 @@ void process_file_with_db_chunk(char *filename) {
 #ifdef _OPENMP
           #pragma omp critical(progress)
 #endif
-        {
-          total_sequences += work_unit.size();
-          total_bases += total_nt;
-          if (Print_Progress) {
-            fprintf(stderr, "\r Processed %llu sequences (database chunk %" PRIu32" of %" PRIu32 ")",
-                    total_sequences, db_chunk_id + 1, KrakenDatabases[0]->chunks());
+          {
+            total_sequences += work_unit.size();
+            total_bases += total_nt;
+            if (Print_Progress) {
+              fprintf(stderr, "\r Processed %llu sequences (database chunk %" PRIu32" of %" PRIu32 ")",
+                      total_sequences, db_chunk_id + 1, KrakenDatabases[i]->chunks());
+            }
           }
         }
-      }
-      fclose(fp);
-    }  // end parallel section
+        fclose(fp);
+      }  // end parallel section
 
-    delete reader;
-    merge_intermediate_results_by_workers(db_chunk_id);
+      delete reader;
+      merge_intermediate_results_by_workers(first_intermediate_output);
+      first_intermediate_output = false;
+    }
   }
 
   fprintf(stderr, "\r Processed %llu sequences\n", total_sequences);
@@ -986,17 +991,12 @@ void classify_sequence_with_db_chunk(std::pair<DNASequence, uint32_t> & seq, FIL
         uint64_t cannonical_kmer = KrakenDatabases[db_id]->canonical_representation(*kmer_ptr);
         const uint64_t minimizer = KrakenDatabases[db_id]->bin_key(cannonical_kmer); // TODO: inefficient because minimizer will also be computed in kmer_query()
 
-        for (size_t i=0; i<KrakenDatabases.size(); ++i) {
-        if (!KrakenDatabases[db_id]->is_minimizer_in_chunk(minimizer, db_chunk_id))
-          continue;
-
-        uint32_t* val_ptr = KrakenDatabases[db_id]->kmer_query_with_db_chunks(
-                cannonical_kmer, &db_statuses[db_id].current_bin_key,
-                &db_statuses[db_id].current_min_pos, &db_statuses[db_id].current_max_pos);
-          if (val_ptr) {
+        if (KrakenDatabases[db_id]->is_minimizer_in_chunk(minimizer, db_chunk_id)) {
+          uint32_t* val_ptr = KrakenDatabases[db_id]->kmer_query_with_db_chunks(
+                  cannonical_kmer, &db_statuses[db_id].current_bin_key,
+                  &db_statuses[db_id].current_min_pos, &db_statuses[db_id].current_max_pos);
+          if (val_ptr)
             taxon = *val_ptr;
-            break;
-          }
         }
       }
       taxa.push_back(taxon);
